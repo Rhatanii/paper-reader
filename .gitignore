@@ -1,0 +1,21 @@
+# 개인 데이터 (논문 PDF·번역·채팅·Notion 설정) — 절대 공개 금지
+data/
+
+# 빌드 산출물
+dist/
+build/
+*.spec
+paper-reader-win.zip
+
+# 가상환경
+venv/
+buildvenv/
+buildenv/
+
+# 파이썬 캐시
+__pycache__/
+*.pyc
+
+# OS 잡파일
+.DS_Store
+Thumbs.db

@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Paper Reader</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📄</text></svg>">
+</head>
+<body>
+
+<!-- ───────── 라이브러리 화면 ───────── -->
+<div id="library-view">
+  <header class="lib-header">
+    <h1>📄 Paper Reader</h1>
+    <p class="sub">Claude 구독 계정으로 동작하는 논문 리더</p>
+  </header>
+
+  <div class="lib-body">
+    <div id="dropzone" class="dropzone">
+      <div class="dz-icon">⬆</div>
+      <div>PDF를 드래그하거나 <b>클릭해서 업로드</b></div>
+      <input type="file" id="file-input" accept="application/pdf" hidden>
+    </div>
+
+    <div class="url-row">
+      <input id="url-input" type="text" placeholder="arXiv 링크 또는 PDF URL (예: https://arxiv.org/abs/1706.03762)">
+      <button id="url-btn" class="btn primary">가져오기</button>
+    </div>
+
+    <div id="upload-status" class="upload-status" hidden></div>
+
+    <div id="paper-grid" class="paper-grid"></div>
+  </div>
+</div>
+
+<!-- ───────── 리더 화면 ───────── -->
+<div id="reader-view" hidden>
+  <header class="reader-header">
+    <button id="back-btn" class="icon-btn" title="목록으로">←</button>
+    <div id="paper-title" class="paper-title"></div>
+    <div class="notion-wrap">
+      <button id="notion-btn" class="icon-btn" title="Notion 로그 설정">🅝<span id="notion-dot" class="dot"></span></button>
+      <div id="notion-menu" class="notion-menu" hidden>
+        <label class="switch-row"><input type="checkbox" id="notion-enabled"> Notion 자동 기록</label>
+        <div id="notion-status" class="notion-status dim">상태 확인 중…</div>
+        <a id="notion-page-link" class="notion-link" target="_blank" rel="noopener" hidden>이 논문 로그 열기 ↗</a>
+        <a id="notion-db-link" class="notion-link" target="_blank" rel="noopener" hidden>로그 DB 열기 ↗</a>
+        <button id="notion-flush" class="btn small wide">지금 동기화</button>
+      </div>
+    </div>
+    <select id="model-select" class="model-select" title="사용할 Claude 모델"></select>
+    <nav class="tabs">
+      <button class="tab" data-tab="summary">요약</button>
+      <button class="tab" data-tab="translation">번역</button>
+      <button class="tab" data-tab="highlights">밑줄</button>
+      <button class="tab" data-tab="chat">채팅</button>
+    </nav>
+  </header>
+
+  <div class="reader-main">
+    <div id="pages" class="pages"></div>
+
+    <div id="panel-resizer" class="panel-resizer" title="드래그해서 패널 크기 조절"></div>
+
+    <aside id="panel" class="panel">
+      <!-- 요약 -->
+      <section id="view-summary" class="panel-view">
+        <div class="panel-head">논문 개요</div>
+        <div id="summary-body" class="panel-scroll md-body"></div>
+        <div id="summary-actions" class="panel-foot">
+          <button id="summary-btn" class="btn primary wide">✨ 개요 생성</button>
+          <button id="summary-regen" class="btn ghost" hidden>다시 생성</button>
+        </div>
+      </section>
+
+      <!-- 번역 -->
+      <section id="view-translation" class="panel-view" hidden>
+        <div class="panel-head">번역 <span id="trans-page-label" class="dim"></span></div>
+        <div id="translation-body" class="panel-scroll">
+          <div class="placeholder">각 페이지 왼쪽 상단의 <b>「번역」</b> 버튼을 누르면<br>이곳에 한글 번역이 표시됩니다.<br><br>원문 문장에 마우스를 올리면<br>대응되는 번역 문장이 하이라이트됩니다.</div>
+        </div>
+      </section>
+
+      <!-- 밑줄 -->
+      <section id="view-highlights" class="panel-view" hidden>
+        <div class="panel-head">밑줄 <span id="hl-count" class="dim"></span></div>
+        <div id="highlights-body" class="panel-scroll">
+          <div class="placeholder">페이지에서 <b>문장을 클릭</b>하면 밑줄을 긋고<br>메모를 남길 수 있습니다.<br><br>밑줄과 메모는 Notion 논문 로그에도 기록됩니다.</div>
+        </div>
+      </section>
+
+      <!-- 채팅 -->
+      <section id="view-chat" class="panel-view" hidden>
+        <div class="panel-head">
+          논문 Q&A
+          <button id="chat-reset" class="btn ghost small" title="대화 기록 삭제">새 대화</button>
+        </div>
+        <div id="chat-body" class="panel-scroll chat-body">
+          <div class="placeholder">이 논문에 대해 무엇이든 물어보세요.<br>Claude가 논문 전문과 페이지 이미지를 참고해 답합니다.</div>
+        </div>
+        <div id="chat-input-resizer" class="chat-input-resizer" title="드래그해서 입력창 크기 조절"></div>
+        <div class="chat-input-row">
+          <textarea id="chat-input" rows="2" placeholder="논문에 대해 질문하기…  (Enter 전송 / Shift+Enter 줄바꿈)"></textarea>
+          <button id="chat-send" class="btn primary">전송</button>
+        </div>
+      </section>
+
+      <!-- Figure 설명 -->
+      <section id="view-figure" class="panel-view" hidden>
+        <div class="panel-head">
+          <button id="figure-close" class="icon-btn" title="닫기">←</button>
+          <span id="figure-label"></span>
+        </div>
+        <div id="figure-body" class="panel-scroll md-body"></div>
+      </section>
+    </aside>
+  </div>
+</div>
+
+<!-- 드래그 선택 툴바 -->
+<div id="sel-toolbar" class="sel-toolbar" hidden>
+  <button id="sel-ask">💬 이 부분 질문</button>
+  <button id="sel-copy">📋 복사</button>
+</div>
+
+<!-- 참고문헌 팝오버 -->
+<div id="ref-popover" class="ref-popover" hidden>
+  <div class="rp-head">
+    <div id="ref-tabs" class="rp-tabs"></div>
+    <button id="ref-close" class="icon-btn" title="닫기">✕</button>
+  </div>
+  <div class="rp-imgwrap"><img id="ref-img" alt="reference entry"></div>
+  <div class="rp-meta">
+    <span id="ref-loc" class="dim"></span>
+    <button id="ref-goto" class="btn small">📍 위치로 이동</button>
+  </div>
+  <div id="ref-summary" class="rp-summary md-body"></div>
+</div>
+
+<!-- 밑줄 메모 팝오버 -->
+<div id="hl-popover" class="hl-popover" hidden>
+  <div id="hl-popover-text" class="hp-text"></div>
+  <textarea id="hl-note" rows="2" placeholder="메모 (선택) — Notion 로그에 함께 기록됩니다"></textarea>
+  <div class="hp-actions">
+    <button id="hl-save" class="btn primary small">밑줄 저장</button>
+    <button id="hl-remove" class="btn small" hidden>밑줄 해제</button>
+    <button id="hl-cancel" class="btn ghost small">취소</button>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
