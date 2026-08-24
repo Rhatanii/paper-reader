@@ -2,7 +2,7 @@
 
 > **Claude 구독 계정으로 동작하는 로컬 논문 리더.** API 키 없이 — 논문 개요 요약, 문장 단위 한글 번역, Figure/Table 설명, Q&A 채팅, 밑줄·메모, Notion 읽기 로그까지.
 
-Moonlight 같은 상용 논문 리더의 핵심 기능을, 별도 API 과금 없이 **이미 쓰고 있는 Claude Pro/Max 구독**으로 대체하는 것이 목표입니다. 앱은 로컬에 로그인된 [Claude Code CLI](https://claude.com/claude-code)를 헤드리스로 호출하므로, 사용자마다 각자의 Claude 계정으로 동작하고 사용량도 각자의 구독에서 차감됩니다.
+별도 API 과금 없이 **이미 쓰고 있는 Claude Pro/Max 구독**으로 대체. 앱은 로컬에 로그인된 [Claude Code CLI](https://claude.com/claude-code)를 헤드리스로 호출하므로, 사용자마다 각자의 Claude 계정으로 동작하고 사용량도 각자의 구독에서 차감됩니다.
 
 <!-- TODO: 스크린샷 추가 (리더 화면 / 번역 hover / reference 팝업) -->
 
