@@ -6,6 +6,8 @@ from pathlib import Path
 import pymupdf
 import pysbd
 
+import paths  # noqa: F401 — Windows cp949 대응 UTF-8 파일 I/O 패치 적용
+
 RENDER_SCALE = 2.0  # 페이지 PNG 렌더링 배율 (144dpi 상당)
 
 _segmenter = pysbd.Segmenter(language="en", clean=False, char_span=True)
