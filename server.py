@@ -266,7 +266,7 @@ async def make_ref_summary(pid: str, n: int, body: dict | None = None):
         return _ndjson(cached())
 
     fulltext = (pdir / "fulltext.txt").read_text()
-    citing = find_citing_sentences(fulltext, n)
+    citing = find_citing_sentences(fulltext, entry)
     prompt = prompts.REF_SUMMARY_PROMPT.format(
         n=n,
         entry=entry["text"][:700],

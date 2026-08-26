@@ -407,13 +407,33 @@ function attachPageEvents(wrap, n) {
   };
 
   let hoverSi = null;
+  let hoverCite = null;
+  let citeTimer = null;
   let raf = null;
   wrap.addEventListener("mousemove", (e) => {
     if (raf) return;
     raf = requestAnimationFrame(() => {
       raf = null;
+      if (e.buttons) return;               // 텍스트 드래그 중엔 hover 동작 없음
       const { cite, sent } = hitTest(e);
       wrap.style.cursor = cite ? "pointer" : "";
+
+      // 인용 위에 잠시 머물면 팝업 자동 오픈
+      if (cite) {
+        cancelRefAutoClose();
+        if (cite !== hoverCite) {
+          hoverCite = cite;
+          clearTimeout(citeTimer);
+          citeTimer = setTimeout(() => {
+            if (hoverCite === cite) openRefPopover(cite.nums, e, true);
+          }, 350);
+        }
+      } else {
+        hoverCite = null;
+        clearTimeout(citeTimer);
+        scheduleRefAutoClose();
+      }
+
       const si = sent ? sent.i : null;
       if (si !== hoverSi) {
         if (hoverSi != null) highlightSentence(n, hoverSi, false);
@@ -425,6 +445,9 @@ function attachPageEvents(wrap, n) {
   wrap.addEventListener("mouseleave", () => {
     if (hoverSi != null) highlightSentence(n, hoverSi, false);
     hoverSi = null;
+    hoverCite = null;
+    clearTimeout(citeTimer);
+    scheduleRefAutoClose();
     wrap.style.cursor = "";
   });
 
@@ -692,6 +715,25 @@ async function explainFigure(fig) {
 const chatBody = $("#chat-body");
 const chatInput = $("#chat-input");
 const chatSend = $("#chat-send");
+const chatJump = $("#chat-jump");
+
+/* 사용자가 맨 아래 근처에 있을 때만 자동 스크롤 (위로 올려두면 그대로 유지) */
+const chatNearBottom = () =>
+  chatBody.scrollHeight - chatBody.scrollTop - chatBody.clientHeight < 80;
+
+function updateChatJump() {
+  if (state.chatBusy && !chatNearBottom()) {
+    chatJump.style.bottom = `${$(".chat-input-row").offsetHeight + 18}px`;
+    chatJump.hidden = false;
+  } else {
+    chatJump.hidden = true;
+  }
+}
+chatJump.addEventListener("click", () => {
+  chatBody.scrollTop = chatBody.scrollHeight;
+  chatJump.hidden = true;
+});
+chatBody.addEventListener("scroll", updateChatJump);
 
 function addBubble(role, text) {
   const div = document.createElement("div");
@@ -732,19 +774,23 @@ async function sendChat() {
         if (ev.type !== "delta") return;
         acc += ev.text;
         if (!raf) raf = requestAnimationFrame(() => {
+          const stick = chatNearBottom();   // 갱신 전 위치 기준으로 판단
           bubble.innerHTML = md(acc);
-          chatBody.scrollTop = chatBody.scrollHeight;
+          if (stick) chatBody.scrollTop = chatBody.scrollHeight;
+          else updateChatJump();
           raf = null;
         });
       }
     );
+    const stick = chatNearBottom();
     bubble.innerHTML = md(acc || "(응답 없음)");
+    if (stick) chatBody.scrollTop = chatBody.scrollHeight;
   } catch (e) {
     bubble.innerHTML = `<span class="dim">오류: ${esc(e.message)}</span>`;
   } finally {
     state.chatBusy = false;
     chatSend.disabled = false;
-    chatBody.scrollTop = chatBody.scrollHeight;
+    chatJump.hidden = true;
     chatInput.focus();
     refreshNotionSoon();
   }
@@ -895,15 +941,36 @@ async function loadCitations() {
 
 const refPopover = $("#ref-popover");
 let refSeq = 0;   // 탭 전환/닫기 후 늦게 도착한 스트림이 DOM을 덮지 않게 하는 토큰
+let refPinned = false;      // 클릭으로 열었거나 팝업 안을 조작하면 자동 닫힘 없음
+let refCloseTimer = null;
 
-function openRefPopover(nums, ev) {
+function cancelRefAutoClose() {
+  clearTimeout(refCloseTimer);
+}
+function scheduleRefAutoClose() {
+  if (refPopover.hidden || refPinned) return;
+  clearTimeout(refCloseTimer);
+  refCloseTimer = setTimeout(() => {
+    if (!refPinned) closeRefPopover();
+  }, 550);
+}
+refPopover.addEventListener("mouseenter", cancelRefAutoClose);
+refPopover.addEventListener("mouseleave", scheduleRefAutoClose);
+refPopover.addEventListener("mousedown", () => {
+  refPinned = true;
+  cancelRefAutoClose();
+});
+
+function openRefPopover(nums, ev, hover = false) {
+  refPinned = !hover;
+  cancelRefAutoClose();
   const tabs = $("#ref-tabs");
   tabs.innerHTML = "";
   for (const n of nums) {
     const b = document.createElement("button");
     b.className = "rp-tab";
     b.dataset.n = n;
-    b.textContent = `[${n}]`;
+    b.textContent = (state.refs[n] && state.refs[n].label) || `[${n}]`;
     b.addEventListener("click", () => selectRef(n));
     tabs.appendChild(b);
   }
@@ -933,22 +1000,53 @@ async function selectRef(n) {
   $("#ref-loc").textContent = `References · p.${entry.page}${entry.continues ? " (다음 페이지로 이어짐)" : ""}`;
   $("#ref-goto").onclick = () => { closeRefPopover(); gotoRef(entry); };
 
+  // 요약은 자동 실행하지 않는다 — 캐시가 있으면 보여주고, 없으면 버튼만
   if (state.refSummaries[n]) {
-    sumEl.innerHTML = md(state.refSummaries[n]);
+    renderRefSummary(n, state.refSummaries[n]);
     return;
   }
-  sumEl.innerHTML = spinner("어떤 논문인지 찾아보는 중… (웹 검색 포함, 수십 초)");
+  sumEl.innerHTML = "";
   try {
     const { summary } = await jfetch(`/api/papers/${state.paper.id}/refs/${n}/summary`);
+    if (seq !== refSeq) return;
     if (summary) {
       state.refSummaries[n] = summary;
-      if (seq === refSeq) sumEl.innerHTML = md(summary);
+      renderRefSummary(n, summary);
       return;
     }
-    let acc = "";
+  } catch {}
+  if (seq === refSeq) showRefSummaryButton(n);
+}
+
+function showRefSummaryButton(n) {
+  const sumEl = $("#ref-summary");
+  sumEl.innerHTML = "";
+  const btn = document.createElement("button");
+  btn.className = "btn primary small";
+  btn.textContent = "✨ 핵심 기여 3줄 요약";
+  btn.addEventListener("click", () => runRefSummary(n));
+  sumEl.appendChild(btn);
+}
+
+function renderRefSummary(n, text) {
+  const sumEl = $("#ref-summary");
+  sumEl.innerHTML = md(text);
+  const regen = document.createElement("button");
+  regen.className = "btn ghost small";
+  regen.textContent = "다시 요약";
+  regen.addEventListener("click", () => runRefSummary(n, true));
+  sumEl.appendChild(regen);
+}
+
+async function runRefSummary(n, force = false) {
+  const seq = refSeq;   // 탭 전환/닫기 시 늦은 스트림이 DOM을 덮지 않게
+  const sumEl = $("#ref-summary");
+  sumEl.innerHTML = spinner("핵심 기여를 찾는 중… (웹 검색 포함, 수십 초)");
+  let acc = "";
+  try {
     await streamPost(
       `/api/papers/${state.paper.id}/refs/${n}/summary`,
-      { model: currentModel() },
+      { model: currentModel(), force },
       (e2) => {
         if (e2.type !== "delta") return;
         acc += e2.text;
@@ -956,16 +1054,23 @@ async function selectRef(n) {
       }
     );
     if (acc) state.refSummaries[n] = acc;
-    if (seq === refSeq) sumEl.innerHTML = md(acc || "(요약 없음)");
+    if (seq === refSeq) renderRefSummary(n, acc || "(요약 없음)");
   } catch (e) {
-    if (seq === refSeq)
-      sumEl.innerHTML = `<div class="dim">요약 실패: ${esc(e.message)}</div>`;
+    if (seq !== refSeq) return;
+    sumEl.innerHTML = `<div class="dim">요약 실패: ${esc(e.message)}</div>`;
+    const retry = document.createElement("button");
+    retry.className = "btn small";
+    retry.textContent = "다시 시도";
+    retry.addEventListener("click", () => runRefSummary(n, force));
+    sumEl.appendChild(retry);
   }
 }
 
 function closeRefPopover() {
   refPopover.hidden = true;
   refSeq++;
+  refPinned = false;
+  cancelRefAutoClose();
 }
 $("#ref-close").addEventListener("click", closeRefPopover);
 document.addEventListener("click", (e) => {

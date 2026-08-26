@@ -320,11 +320,90 @@ def _expand_nums(group: str):
     return nums
 
 
-def parse_references(doc):
-    """References 섹션을 찾아 [N] 형식 항목을 파싱.
+YEAR_RE = re.compile(r"\b((?:19|20)\d{2})([a-z])?\b")
 
-    반환: {"head": {"page", "y"}, "entries": [{n, text, page, rect}]} 또는 None
-    (author-year 스타일 등 [N] 항목이 없으면 None)
+
+def _numeric_raw_entries(lines):
+    """[N] 라벨 스타일 항목 파싱. {n: {"n","text","lines"}}"""
+    entries = {}
+    cur = None
+    for pno, bbox, text in lines:
+        m = ENTRY_RE.match(text)
+        if m:
+            n = int(m.group(1))
+            if n not in entries:
+                cur = {"n": n, "text": text, "lines": [(pno, bbox)]}
+                entries[n] = cur
+            else:
+                cur = None
+        elif cur is not None and len(cur["lines"]) < 8:
+            cur["text"] = (cur["text"] + " " + text)[:800]
+            cur["lines"].append((pno, bbox))
+    return entries
+
+
+def _author_year_raw_entries(lines, doc):
+    """라벨 없는 author-year 스타일: hanging indent(왼쪽 여백 시작)로 항목 분리."""
+    # 페이지 상단 러닝 헤더(학회명·연도 등)는 항목으로 오인되므로 제외
+    lines = [
+        (p, b, t) for p, b, t in lines
+        if b[1] > doc[p - 1].rect.height * 0.06
+    ]
+    if not lines:
+        return {}
+
+    def colkey(pno, bbox):
+        return (pno, 0 if bbox[0] < doc[pno - 1].rect.width / 2 else 1)
+
+    col_min = {}
+    for pno, bbox, _ in lines:
+        k = colkey(pno, bbox)
+        col_min[k] = min(col_min.get(k, 1e9), bbox[0])
+
+    raw = []
+    cur = None
+    for pno, bbox, text in lines:
+        is_start = bbox[0] - col_min[colkey(pno, bbox)] < 4.0
+        if is_start:
+            if cur:
+                raw.append(cur)
+            cur = {"text": text, "lines": [(pno, bbox)]}
+        elif cur is not None and len(cur["lines"]) < 10:
+            cur["text"] = (cur["text"] + " " + text)[:800]
+            cur["lines"].append((pno, bbox))
+    if cur:
+        raw.append(cur)
+
+    # 연도가 없는 덩어리(섹션 제목·부록 본문)는 제외하고,
+    # 연도 없는 덩어리가 연속으로 이어지면 References가 끝난 것으로 본다
+    entries = {}
+    n = 0
+    dry = 0
+    for e in raw:
+        m = YEAR_RE.search(e["text"])
+        # 첫 저자의 성 추출: 이니셜("I.")의 마침표를 지운 뒤 첫 쉼표/마침표 전까지,
+        # "A and B" 형식이면 첫 저자만
+        head80 = re.sub(r"\b([A-Z])\.", r"\1", e["text"][:80])
+        seg = re.split(r"[.,]", head80, 1)[0][:60]
+        first_author = re.split(r"\s+(?:and|&)\s+", seg)[0]
+        words = re.findall(r"[A-Za-z\-']+", first_author)
+        if not m or not words:
+            dry += 1
+            if dry >= 15:
+                break
+            continue
+        dry = 0
+        n += 1
+        e["n"] = n
+        e["ay"] = {"surname": words[-1], "year": m.group(1), "suffix": m.group(2)}
+        entries[n] = e
+    return entries
+
+
+def parse_references(doc):
+    """References 섹션 파싱 — [N] 숫자 스타일과 author-year 스타일 모두 지원.
+
+    반환: {"style": "numeric"|"ay", "head": {...}, "entries": [...]} 또는 None
     """
     all_lines = []  # (page_no, bbox, text)
     for pno in range(len(doc)):
@@ -342,27 +421,18 @@ def parse_references(doc):
     if head_idx is None:
         return None
     head_page, head_bbox, _ = all_lines[head_idx]
+    region = all_lines[head_idx + 1:]
 
-    entries = {}
-    cur = None
-    for pno, bbox, text in all_lines[head_idx + 1:]:
-        m = ENTRY_RE.match(text)
-        if m:
-            n = int(m.group(1))
-            if n not in entries:
-                cur = {"n": n, "text": text, "lines": [(pno, bbox)]}
-                entries[n] = cur
-            else:
-                cur = None
-        elif cur is not None and len(cur["lines"]) < 8:
-            # 항목 이어짐 (다음 [N] 전까지, 과도한 흡수 방지 위해 8라인 제한)
-            cur["text"] = (cur["text"] + " " + text)[:800]
-            cur["lines"].append((pno, bbox))
-
+    entries = _numeric_raw_entries(region)
+    style = "numeric"
+    if not entries:
+        entries = _author_year_raw_entries(region, doc)
+        style = "ay"
     if not entries:
         return None
 
     result = []
+    end_page, end_y = head_page, head_bbox[3]
     for n in sorted(entries):
         e = entries[n]
         page = e["lines"][0][0]
@@ -372,26 +442,105 @@ def parse_references(doc):
         x1 = max(r[2] for r in rects)
         y1 = max(r[3] for r in rects)
         pr = doc[page - 1].rect
+        ay = e.get("ay")
         result.append(
             {
                 "n": n,
                 "text": e["text"],
                 "page": page,
                 "rect": _norm_rect((x0, y0, x1, y1), pr.width, pr.height),
-                "continues": e["lines"][-1][0] != page,  # 다음 페이지로 이어짐
+                "continues": e["lines"][-1][0] != page,
+                "label": (f"{ay['surname']} {ay['year']}{ay['suffix'] or ''}"
+                          if ay else f"[{n}]"),
+                **({"ay": ay} if ay else {}),
             }
         )
-    return {"head": {"page": head_page, "y": head_bbox[1] / doc[head_page - 1].rect.height},
-            "entries": result}
+        lp, lb = e["lines"][-1]
+        if (lp, lb[3]) > (end_page, end_y if lp == end_page else -1):
+            end_page, end_y = lp, lb[3]
+    return {
+        "style": style,
+        "head": {"page": head_page, "y": head_bbox[1] / doc[head_page - 1].rect.height},
+        # 참고문헌 목록의 끝 — 이 뒤(부록 등)의 인용은 본문 인용으로 취급
+        "end": {"page": end_page, "y": end_y / doc[end_page - 1].rect.height},
+        "entries": result,
+    }
 
 
-def detect_citations(doc, valid_nums: set, head: dict | None):
-    """본문에서 [N], [N-M], [N, M] 인용 표기를 좌표와 함께 탐지.
+# author-year 본문 인용: (Wu et al., 2016; Chen & Lee, 2017) / Wu et al. (2016)
+AY_PAREN_RE = re.compile(r"\(([^()]*?(?:19|20)\d{2}[a-z]?[^()]*?)\)")
+AY_SEG_RE = re.compile(r"([A-Z][A-Za-z\-']+)[^;()]*?((?:19|20)\d{2})([a-z])?")
+AY_NARR_RE = re.compile(
+    r"([A-Z][A-Za-z\-']+)(?:\s+et\s+al\.?|\s+(?:and|&)\s+[A-Z][A-Za-z\-']+)?"
+    r"\s*\(((?:19|20)\d{2})([a-z])?\)"
+)
 
-    valid_nums 에 없는 번호만 있는 매치는 버림(오탐 방지).
-    head 이후(References 영역)의 매치는 제외.
-    """
+
+def _in_ref_region(pno, rects, head, end):
+    """참고문헌 목록 내부인가 (목록 뒤 부록의 인용은 본문 인용으로 취급)."""
+    if not head or not rects:
+        return False
+    p, y = pno + 1, rects[0][1]
+    after_head = p > head["page"] or (p == head["page"] and y >= head["y"])
+    if not after_head:
+        return False
+    if not end:
+        return True
+    return p < end["page"] or (p == end["page"] and y <= end["y"] + 0.01)
+
+
+def detect_citations(doc, refs: dict):
+    """본문 인용 표기를 좌표와 함께 탐지 (숫자/author-year 스타일 자동)."""
+    head = refs.get("head")
+    end = refs.get("end")
     citations = []
+
+    if refs.get("style") == "ay":
+        # (성 소문자, 연도) → 등장 순 항목 번호 목록
+        ay_index = {}
+        for e in refs["entries"]:
+            key = (e["ay"]["surname"].lower(), e["ay"]["year"])
+            ay_index.setdefault(key, []).append(e["n"])
+
+        def resolve(surname, year, suffix):
+            lst = ay_index.get((surname.lower(), year), [])
+            if not lst:
+                return None
+            if suffix:
+                idx = ord(suffix) - 97
+                return lst[idx] if idx < len(lst) else lst[0]
+            return lst[0]
+
+        for pno in range(len(doc)):
+            page = doc[pno]
+            words, text, spans = _words_and_text(page)
+            if not words:
+                continue
+            pw, ph = page.rect.width, page.rect.height
+            word_starts = [s[0] for s in spans]
+            found = []  # (start, end, nums)
+            for m in AY_PAREN_RE.finditer(text):
+                nums = []
+                for seg in m.group(1).split(";"):
+                    sm = AY_SEG_RE.search(seg)
+                    if sm:
+                        n = resolve(sm.group(1), sm.group(2), sm.group(3))
+                        if n and n not in nums:
+                            nums.append(n)
+                if nums:
+                    found.append((m.start(), m.end(), nums))
+            for m in AY_NARR_RE.finditer(text):
+                n = resolve(m.group(1), m.group(2), m.group(3))
+                if n:
+                    found.append((m.start(), m.end(), [n]))
+            for start, stop, nums in found:
+                rects = _range_to_rects(words, spans, word_starts, start, stop, pw, ph)
+                if rects and not _in_ref_region(pno, rects, head, end):
+                    citations.append({"page": pno + 1, "nums": nums, "rects": rects})
+        return citations
+
+    # 숫자 스타일 [N], [N-M], [N, M]
+    valid_nums = {e["n"] for e in refs["entries"]}
     for pno in range(len(doc)):
         page = doc[pno]
         words, text, spans = _words_and_text(page)
@@ -404,15 +553,8 @@ def detect_citations(doc, valid_nums: set, head: dict | None):
             if not nums:
                 continue
             rects = _range_to_rects(words, spans, word_starts, m.start(), m.end(), pw, ph)
-            if not rects:
-                continue
-            # References 영역 내부(항목 라벨 등)는 제외
-            if head and (
-                pno + 1 > head["page"]
-                or (pno + 1 == head["page"] and rects[0][1] >= head["y"])
-            ):
-                continue
-            citations.append({"page": pno + 1, "nums": nums, "rects": rects})
+            if rects and not _in_ref_region(pno, rects, head, end):
+                citations.append({"page": pno + 1, "nums": nums, "rects": rects})
     return citations
 
 
@@ -424,18 +566,20 @@ def ensure_citations(paper_dir: Path) -> dict:
     cf = paper_dir / "citations.json"
     rf = paper_dir / "references.json"
     if cf.exists() and rf.exists():
-        return {
-            "citations": json.loads(cf.read_text()),
-            "references": json.loads(rf.read_text()),
-        }
+        refs_cached = json.loads(rf.read_text())
+        # 구버전 캐시(style/end 필드 없음)는 재파싱
+        if "style" in refs_cached and "end" in refs_cached:
+            return {
+                "citations": json.loads(cf.read_text()),
+                "references": refs_cached,
+            }
     doc = pymupdf.open(paper_dir / "paper.pdf")
     try:
         refs = parse_references(doc)
         if refs:
-            valid = {e["n"] for e in refs["entries"]}
-            cites = detect_citations(doc, valid, refs["head"])
+            cites = detect_citations(doc, refs)
         else:
-            refs = {"head": None, "entries": []}
+            refs = {"style": "none", "head": None, "entries": []}
             cites = []
     finally:
         doc.close()
@@ -466,15 +610,36 @@ def ensure_ref_crop(paper_dir: Path, entry: dict) -> Path:
     return png
 
 
-def find_citing_sentences(fulltext: str, n: int, limit: int = 4):
-    """본문에서 [n] 을 인용한 문장들."""
+def find_citing_sentences(fulltext: str, entry: dict, limit: int = 4):
+    """본문에서 해당 참고문헌을 인용한 문장들 (숫자/author-year 스타일 모두)."""
+    ay = entry.get("ay")
+    entry_head = entry.get("text", "")[:25]
+
+    if ay:
+        # "Vaswani et al., 2017" — et al.의 마침표 때문에 문장 분리가 깨지므로
+        # 전문에서 (성 … 연도) 매치 주변 문맥을 잘라서 사용
+        pat = re.compile(
+            re.escape(ay["surname"]) + r"[^);\n]{0,60}?" + ay["year"]
+        )
+        out = []
+        for m in pat.finditer(fulltext):
+            s = max(0, m.start() - 180)
+            e = min(len(fulltext), m.end() + 120)
+            ctx = " ".join(fulltext[s:e].split())
+            if entry_head and entry_head in ctx:  # 참고문헌 항목 자체 제외
+                continue
+            out.append(("…" + ctx + "…")[:350])
+            if len(out) >= limit:
+                break
+        return out
+
     out = []
     for raw in re.split(r"(?<=[.!?])\s+", fulltext):
         line = raw.strip()
         if ENTRY_RE.match(line):  # 참고문헌 항목 자체는 제외
             continue
         for m in CITE_RE.finditer(line):
-            if n in _expand_nums(m.group(1)):
+            if entry["n"] in _expand_nums(m.group(1)):
                 out.append(line[:350])
                 break
         if len(out) >= limit:
