@@ -719,6 +719,20 @@ def main():
         p("     " + claude_client.NO_CLAUDE_MSG.replace("\n", "\n     "))
     p()
 
+    # 포트 선점 확인 — 중복 실행 시 친절한 안내 후 종료
+    import socket
+
+    with socket.socket() as sock:
+        try:
+            sock.bind((host, port))
+        except OSError:
+            p(f"  ⚠ 포트 {port} 가 이미 사용 중입니다.")
+            p(f"     Paper Reader가 이미 켜져 있을 가능성이 높습니다 — 브라우저에서 {url} 을 열어보세요.")
+            p("     새로 시작하려면 기존 콘솔 창을 닫거나, PAPER_READER_PORT 환경변수로 다른 포트를 지정하세요.")
+            p()
+            input("아무 키나 누르면 종료합니다...") if os.name == "nt" else None
+            sys.exit(1)
+
     if not os.environ.get("PAPER_READER_NO_BROWSER"):
         def open_browser():
             try:
