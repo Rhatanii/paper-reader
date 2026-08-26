@@ -707,9 +707,14 @@ def main():
     def p(*a):
         print(*a, flush=True)
 
+    from datetime import datetime
+    from pathlib import Path as _P
+
+    build = datetime.fromtimestamp(_P(__file__).stat().st_mtime).strftime("%Y-%m-%d %H:%M")
     p()
     p("  📄 Paper Reader")
     p(f"     주소     : {url}")
+    p(f"     코드버전 : {build}")
     p(f"     데이터   : {DATA}")
     cb = claude_client.find_claude()
     if cb:
