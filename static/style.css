@@ -186,6 +186,9 @@ button { font: inherit; cursor: pointer; }
 .md-body strong { font-weight: 700; }
 .md-body table { border-collapse: collapse; margin: 10px 0; font-size: 12.5px; }
 .md-body th, .md-body td { border: 1px solid var(--border); padding: 4px 8px; }
+/* KaTeX 수식 */
+.katex-display { margin: 10px 0; overflow-x: auto; overflow-y: hidden; }
+.katex { font-size: 1.06em; }
 
 /* 채팅 */
 .chat-body { display: flex; flex-direction: column; gap: 10px; }

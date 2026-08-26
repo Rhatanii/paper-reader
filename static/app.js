@@ -57,8 +57,35 @@ function esc(s) {
     .replace(/"/g, "&quot;");
 }
 
-/* 미니 마크다운 렌더러 (헤딩/볼드/이탤릭/코드/리스트/인용/표/링크) */
+/* 수식 렌더링: $$…$$, $…$, \[…\], \(…\) 를 KaTeX로 실제 수식으로 그림 */
+function renderMath(tex, display) {
+  if (window.katex) {
+    try {
+      return katex.renderToString(tex, { displayMode: display, throwOnError: false });
+    } catch {}
+  }
+  return `<code>${esc(tex)}</code>`;   // KaTeX 미로드 시 폴백
+}
+
 function md(src) {
+  // 마크다운 처리 전에 수식을 떼어내 플레이스홀더로 보호 (표의 | 파싱 충돌도 방지)
+  const math = [];
+  const put = (tex, display) => {
+    math.push([tex.trim(), display]);
+    return `%%MATH${math.length - 1}%%`;
+  };
+  src = src
+    .replace(/\$\$([\s\S]+?)\$\$/g, (_, t) => put(t, true))
+    .replace(/\\\[([\s\S]+?)\\\]/g, (_, t) => put(t, true))
+    .replace(/\\\(([\s\S]+?)\\\)/g, (_, t) => put(t, false))
+    .replace(/\$([^\s$][^$\n]*?)\$/g, (m, t) =>
+      /^[\d.,%\s]+$/.test(t) ? m : put(t, false));   // "$100" 같은 금액은 제외
+  const html = mdCore(src);
+  return html.replace(/%%MATH(\d+)%%/g, (_, i) => renderMath(...math[+i]));
+}
+
+/* 미니 마크다운 렌더러 (헤딩/볼드/이탤릭/코드/리스트/인용/표/링크) */
+function mdCore(src) {
   const lines = src.split("\n");
   const out = [];
   let i = 0;
